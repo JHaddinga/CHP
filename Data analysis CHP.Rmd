@@ -1,0 +1,195 @@
+---
+title: "Analysis Belgian Start-Ups CHP"
+author: "Joost Haddinga"
+date: "5/6/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(dynlm)
+library(AER)
+library(lmtest)
+library(sandwich)
+library(zoo)
+library(data.table)
+```
+Load data previously collected in dropbox
+```{r}
+IWT_database <- read_excel("~/Desktop/Bachelor_TiU/CHP/Copy of IWT Longitudinale database (without y1).xlsx")
+
+
+IWT_data <- IWT_database %>% select(-ageinmonths) %>%
+  rename(assets = 'Activa (assets, 20/58)') %>%
+  rename(turnover = 'bedrijfsopbrengsten (turnover;revenues, 70/76A)') %>%
+  rename(ebit = 'bedrijfswinst/verlies voor belastingen (profit/losses before tax, 9903)') %>%
+  rename(gross_margin = 'brutomarge (gross margin, 9900)') %>%
+  rename(net_income = 'winst/verlies van het boekjaar (net income, 9904)') %>%
+  rename(employees = 'employees (code 100.3 or 1003) or 9087')%>%
+  mutate(ebit = as.numeric(ebit))%>%
+  mutate(net_income = as.numeric(net_income))
+  
+head(IWT_data)
+```
+
+Basic summary statistics
+```{r}
+summary(IWT_data)
+
+summary(IWT_data %>% group_by(Survival_years))
+
+summary(IWT_data %>% group_by(founding_year))
+
+
+```
+
+## Basic plots - levels
+```{r}
+ggplot(IWT_data, aes(Survival_years, assets, group=company_name))+geom_line()
+
+ggplot(IWT_data, aes(Survival_years, turnover, group=company_name))+geom_line()
+
+ggplot(IWT_data, aes(Survival_years, gross_margin, group=company_name))+geom_line()
+
+ggplot(IWT_data, aes(Survival_years, net_income, group=company_name))+geom_line()
+
+ggplot(IWT_data, aes(Survival_years, ebit, group=company_name))+geom_line()
+
+ggplot(IWT_data, aes(Survival_years, employees, group=company_name))+geom_line()
+```
+## Basic plots - logs
+```{r}
+ggplot(IWT_data, aes(Survival_years, log(assets*1000), group=company_name))+geom_line()
+
+ggplot(IWT_data, aes(Survival_years, log(turnover*1000), group=company_name))+geom_line()
+
+ggplot(IWT_data, aes(Survival_years, log(gross_margin*1000), group=company_name))+geom_line()
+
+ggplot(IWT_data, aes(Survival_years, log(net_income*1000), group=company_name))+geom_line()
+
+ggplot(IWT_data, aes(Survival_years, log(ebit*1000), group=company_name))+geom_line()
+
+ggplot(IWT_data, aes(Survival_years, employees, group=company_name))+geom_line()
+
+#logs problematic whenever negative values or 0 - gross margin, ebit, net income
+```
+```{r}
+ggplot(IWT_data, aes(Survival_years, log(assets*1000), group=company_name))+geom_line()+facet_wrap(~founding_year)
+
+ggplot(IWT_data, aes(Survival_years, log(ebit*1000), group=company_name))+geom_line()+facet_wrap(~founding_year)
+
+ggplot(IWT_data, aes(log(assets)))+geom_boxplot()+facet_wrap(~Survival_years)
+```
+
+
+
+## Data manipulation
+  * Build controls for final status
+  * Trim data, make it neat
+  * Build controls for sector
+  * Build controls for time
+  * Build controls for negative values and developments
+  * Get correlations
+  
+```{r}
+IWT_data1 <- IWT_data %>%
+  select(-turnover) %>%
+  drop_na() %>%
+  mutate(sector = ifelse(sector1==1, 1, ifelse(sector2==1, 2, ifelse(sector3==1, 3, ifelse(sector4 ==1, 4, ifelse(sector5==1,5,6)))))) %>%
+  mutate(margin_growth = ifelse(Firstyear != 1, (gross_margin-shift(gross_margin)/shift(gross_margin)),0.001)) %>%
+  mutate(income_growth = ifelse(Firstyear != 1, (net_income-shift(net_income)/shift(net_income)),0.001)) %>%
+  mutate(ebit_growth = ifelse(Firstyear != 1, (ebit-shift(ebit))/shift(ebit),0.001))%>%
+  mutate(lassets = log(assets)) %>% filter(lassets > -100000)
+
+IWT_data2 <- IWT_data1 %>%
+  group_by(company_name)%>%
+  mutate(final_status = ifelse(failureTOT==1,'Failed', ifelse(acquired==1, 'Acquired', ifelse(merged==1, 'Merged', 'Self-sufficient'))))%>% #Make these transfer to all observations of status 
+ungroup()
+
+
+
+cor(IWT_data2$assets, IWT_data2$net_income, use="complete.obs")
+cor(IWT_data2$lassets, IWT_data2$net_income, use="complete.obs") #Why not working?
+cor(IWT_data2$lassets, IWT_data2$income_growth, use="complete.obs") #Why not working?
+cor(IWT_data2$assets, IWT_data2$Survival_years, use="complete.obs")
+cor(IWT_data2$net_income, IWT_data2$employees, use="complete.obs")
+cor(IWT_data2$assets, IWT_data2$employees, use="complete.obs")
+cor(IWT_data2$assets, IWT_data2$founding_year, use="complete.obs")
+cor(IWT_data2$net_income, IWT_data2$margin_growth, use="complete.obs")
+```
+
+## Plots with manipulated data
+  * Include various facets
+  * Include relationships between variables (excl. time) - but maybe control for time
+  * Format graphs for more readability
+  * Include basic regressions
+```{r}
+ggplot(IWT_data2, aes(Survival_years, assets, group=company_name))+geom_line()+facet_wrap(~sector)
+
+
+ggplot(IWT_data2, aes(Survival_years, log(assets), group=company_name))+geom_line()+facet_wrap(~sector)
+
+ggplot(IWT_data2, aes(Survival_years, assets, group=company_name))+geom_line()+facet_wrap(~founding_year)
+
+
+ggplot(IWT_data2, aes(Survival_years, log(assets), group=company_name))+geom_line()+facet_wrap(~founding_year)
+
+ggplot(IWT_data2, aes(Survival_years, gross_margin, group=company_name))+geom_line()
+
+ggplot(IWT_data2, aes(Survival_years, net_income, group=company_name))+geom_line()
+#Problems with regressions: Different time paths due to different foundation years and different lengths of observation - additional to Survivorship bias
+
+ggplot(IWT_data2, aes(Survival_years, ebit, group=company_name))+geom_line()
+
+ggplot(IWT_data2, aes(Survival_years, employees, group=company_name))+geom_line()
+```
+
+```{r}
+ggplot(IWT_data2, aes(Survival_years, income_growth, group=company_name))+geom_line()
+
+ggplot(IWT_data2, aes(Survival_years, income_growth, group=company_name))+geom_line()+facet_wrap(~sector)
+
+ggplot(IWT_data2, aes(Survival_years, ebit_growth, group=company_name))+geom_line() #Graph seems very odd
+
+ggplot(IWT_data2, aes(Survival_years, margin_growth, group=company_name))+geom_line()
+
+ggplot(IWT_data2, aes(Survival_years, margin_growth, group=company_name))+geom_line()+facet_wrap(~sector)
+#smoothers not helpful due to different legths of trajectories
+```
+
+
+## Simple regressions
+  * levels
+  * logs
+  * only specify assets
+  * all specifications
+  * test heterogeneity / endogeneity
+  * include controls / lags
+```{r}
+#What to regress assets upon to symbolize growth of a company?
+mod1 <- lm(net_income ~ assets + founding_year, data=IWT_data2)
+summary(mod1)
+
+mod2 <- lm(net_income ~ assets +employees + founding_year, data=IWT_data2)
+summary(mod2)
+
+mod3 <- lm(Survival_years ~ assets +employees + founding_year, data=IWT_data2)
+summary(mod3)
+
+
+mod4 <- lm(Survival_years ~ lassets +employees + founding_year, data=IWT_data2)
+summary(mod4)
+
+mod5 <- lm(Survival_years ~ lassets +employees + founding_year+income_growth+margin_growth, data=IWT_data2)
+summary(mod5)
+mod6 <- lm(Survival_years ~ lassets + founding_year+net_income+gross_margin, data=IWT_data2)
+summary(mod6)
+mod7 <- lm(Survival_years ~ lassets +employees + founding_year+sector1+sector2+sector3+sector4+sector5, data=IWT_data2)
+summary(mod7)
+```
+
